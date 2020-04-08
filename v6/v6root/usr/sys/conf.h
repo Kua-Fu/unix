@@ -18,12 +18,12 @@ struct
  * device switches is in the
  * file conf.c.
  */
-struct	bdevsw
+struct	bdevsw // 块设备驱动表
 {
-	int	(*d_open)();
-	int	(*d_close)();
-	int	(*d_strategy)();
-	int	*d_tab;
+	int	(*d_open)(); // 指向打开设备的函数的指针
+	int	(*d_close)(); // 指向关闭设备的函数的指针
+	int	(*d_strategy)(); // 指向访问设备的函数的指针，读取和写入共用一个函数，通过缓冲区的标志位判断进行何种操作
+	int	*d_tab; // 指向devtab结构体的指针
 } bdevsw[];
 
 /*

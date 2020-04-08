@@ -25,12 +25,12 @@
 #define	CTLRDY	0200
 
 struct {
-	int rkds;
-	int rker;
-	int rkcs;
-	int rkwc;
-	int rkba;
-	int rkda;
+	int rkds; // drive status寄存器，表示磁盘状态，只有在表示磁盘驱动中发生错误时候才使用
+	int rker; // error寄存器，表示错误状态，只有在表示磁盘驱动中发生错误时候才使用
+	int rkcs; // control status寄存器，用于控制磁盘
+	int rkwc; // word count寄存器，表示待传送数据的长度
+	int rkba; // current bus address寄存器，表示内存中待传送数据的地址
+	int rkda; // disk address寄存器，表示磁盘中待传送数据的地址
 };
 
 struct	devtab	rktab;

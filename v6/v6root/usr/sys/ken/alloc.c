@@ -11,6 +11,14 @@
 #include "../user.h"
 
 /*
+ * 块设备中的inode和存储区域中的块，分别由超级块中的inode空闲队列(filsys.s_inode[])和存储空闲队列(filsys.s_free[])管理
+ * filsys.s_inode[]和filsys.s_free[]的元素数为100，分别保存着未分配的inode编号和未分配的存储区域的块编号
+ * filsys.s_ninode和filsys.s_nfree分别容纳inode空闲队列和存储空闲你队列中编号的数量
+ * 当这两个变量的值变为0，需要从块设备取得未分配的inode编号和块编号补充空闲队列
+ *
+ */
+
+/*
  * iinit is called once (from main)
  * very early in initialization.
  * It reads the root's super block

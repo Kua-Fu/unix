@@ -32,11 +32,11 @@ struct	callo
  * One allocated on every mount.
  * Used to find the super block.
  */
-struct	mount
+struct	mount // 被挂载的块设备
 {
-	int	m_dev;		/* device mounted */
-	int	*m_bufp;	/* pointer to superblock */
-	int	*m_inodp;	/* pointer to mounted on inode */
+	int	m_dev;		/* device mounted */ // 被挂载的块设备的设备编号
+	int	*m_bufp;	/* pointer to superblock */ // 指向块设备缓冲区的指针，该缓冲区容纳着被复制的超级块的数据
+	int	*m_inodp;	/* pointer to mounted on inode */ // 代表挂载点的inode[]元素
 } mount[NMOUNT];
 int	mpid;			/* generic for unique process id's */
 char	runin;			/* scheduling flag */
