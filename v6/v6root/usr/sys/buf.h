@@ -32,7 +32,7 @@ struct buf
 	char	*b_blkno;		/* block # on device */ // 块编号
 	char	b_error;		/* returned after I/O */ // 表示在访问设备时候发生错误
 	char	*b_resid;		/* words not transferred after error */ // 用于RAW输入输出，保存因错误而无法传送的数据的长度（字节为单位）
-} buf[NBUF];
+} buf[NBUF]; // NUBF 值为15
 
 /*
  * Each block device has a devtab, which contains private state stuff
@@ -48,7 +48,7 @@ struct buf
 struct devtab
 {
 	char	d_active;		/* busy flag */  // 设备处理中
-	char	d_errcnt;		/* error count (for recovery) */ // 错误指针
+	char	d_errcnt;		/* error count (for recovery) */ // 错误计数
 	struct	buf *b_forw;		/* first buffer for this dev */ // 指向b-list的头部
 	struct	buf *b_back;		/* last buffer for this dev */ // 指向b-list的末尾
 	struct	buf *d_actf;		/* head of I/O queue */ // 指向设备处理队列的头部
