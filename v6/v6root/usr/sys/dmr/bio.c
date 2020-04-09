@@ -297,6 +297,15 @@ incore(adev, blkno)
  * (e.g. during exec, for the user arglist) getblk can be called
  * with device NODEV to avoid unwanted associativity.
  */
+
+/*
+ * getblk()是取得根据设备编号与块编号命名的缓冲区的函数
+ *
+ *
+ *
+ *
+ */
+
 getblk(dev, blkno)
 {
 	register struct buf *bp;
