@@ -8,6 +8,29 @@
 #include "../buf.h"
 
 /*
+ * 内核使用户可以通过文件、目录等易于理解和管理的概念访问块设备上的数据
+ * 如何使用块设备上的区域？内核如何管理块设备上的空闲区域？文件的实体是什么？如何命名并管理文件？用户程序如何操作文件和目录？
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ *
+ */
+
+/*
  * Look up an inode by device,inumber.
  * If it is in core (in the inode structure),
  * honor the locking protocol.
