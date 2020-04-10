@@ -46,42 +46,17 @@
  * 一般情况下，输入输出功能需要通过缓冲区与虚拟地址空间交换数据，但是RAW输入输出可以直接传送数据，无需通过缓冲区
  * 为了使用RAW输入输出功能，系统管理者需要生成专用的特殊文件，首先生成供字符设备使用的特殊文件，然后将其注册到字符设备驱动表
  *
+ * 小结:
+ * 设备分为块设备和字符设备两种
+ * 设备驱动有设备驱动表进行管理
+ * 设备由类别和设备编号进行管理
+ * 为了使用设备，必须提前生成特殊文件
+ * 对块设备的处理集中在块设备子系统中
+ * 通过块设备缓冲区访问块设备，缓冲区保证了数据的一致性，同时也起到了缓存的作用
+ * 读取分为同步读取和异步读取，预读取功能采用了异步读取
+ * 写入分为同步写入和异步写入，此外还有延迟写入
+ * 通过RAW输入输出传输数据时候，无需缓冲区，也不受块长度的限制
  *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- *
- */
-/*
  */
 
 #include "../param.h"
@@ -134,6 +109,17 @@ int	httab;
 /*
  * Read in (if necessary) the block and return a buffer pointer.
  */
+
+/*
+ * 读取分为同步读取和异步读取两种类型
+ * 同步读取时候，进程首先使用getblk()取得缓冲区，然后对块设备提出读取请求，并执行iowait()进入睡眠状态，当块设备的处理完成后，由中断处理函数执行的iodone()唤醒入睡的进程，随后，该进程执行brelse()， 释放获取的缓冲区
+ * 异步读取的时候，进程继续原有处理，无需等待块设备的读取处理结束，缓冲区由中断处理函数执行的iodone()自动释放，当已经设置了缓冲区的B_ASYNC的标志位时候，表示当前的读取位异步读取
+ * 异步读取采用预读取的方式，该方式指按照顺序读取属于某个文件的块时候，预先将下一个块的数据读取到缓冲区
+ *
+ * bread()是进行同步读取的函数，它通过检查由getblk()获取的缓冲区的B_DONE标志位来判断缓冲区内的数据是否是最新，如果为最新则不会访问设备，否则会对设备进行访问
+ * 参数: (1) dev, 设备编号 (2) blkno, 块编号
+ */
+
 bread(dev, blkno)
 {
 	register struct buf *rbp;
@@ -141,17 +127,24 @@ bread(dev, blkno)
 	rbp = getblk(dev, blkno);
 	if (rbp->b_flags&B_DONE)
 		return(rbp);
-	rbp->b_flags =| B_READ;
+	rbp->b_flags =| B_READ; // 设置B_READ标志位，将读取长度设定为-256(表示512字节），然后执行设定于bdevsw[]中的设备访问函数
 	rbp->b_wcount = -256;
 	(*bdevsw[dev.d_major].d_strategy)(rbp);
-	iowait(rbp);
-	return(rbp);
+	iowait(rbp); // 执行iowait()， 进入等待状态直到设备的读取处理结束
+	return(rbp); // 返回该缓冲区，该缓冲区用来容纳从设备中读取的数据
 }
 
 /*
  * Read in the block, like bread, but also start I/O on the
  * read-ahead block (which is not allocated to the caller)
  */
+
+/*
+ * breada() 是从块设备中读取数据，同时也负责预读取的函数，预读取是异步进行的，当设备的读取处理结束时候，由块设备驱动执行的iodone()释放缓冲区
+ * 参数: (1) adev, 设备编号 (2) blkno, 块编号 (3) rablkno，预读取块编号
+ *
+ */
+
 breada(adev, blkno, rablkno)
 {
 	register struct buf *rbp, *rabp;
@@ -159,34 +152,45 @@ breada(adev, blkno, rablkno)
 
 	dev = adev;
 	rbp = 0;
-	if (!incore(dev, blkno)) {
-		rbp = getblk(dev, blkno);
+	if (!incore(dev, blkno)) { // 执行incore()， 检查准备读取的设备的块的缓冲区是否存在
+		rbp = getblk(dev, blkno); // 如果缓冲区不存在，则执行getblk()获取缓冲区，如果尚未设置获取的缓冲区的B_DONE标志位，则启动从设备读取数据的处理
 		if ((rbp->b_flags&B_DONE) == 0) {
 			rbp->b_flags =| B_READ;
 			rbp->b_wcount = -256;
 			(*bdevsw[adev.d_major].d_strategy)(rbp);
 		}
 	}
-	if (rablkno && !incore(dev, rablkno)) {
-		rabp = getblk(dev, rablkno);
+	if (rablkno && !incore(dev, rablkno)) { // 准备进行预处理，且缓冲区不存在的时候的处理
+		rabp = getblk(dev, rablkno); // 执行getblk()获取缓冲区，如果已经设置了获取的缓冲区的B_DONE标志位，则表示已有数据被读取，因此执行brelse()释放缓冲区
 		if (rabp->b_flags & B_DONE)
 			brelse(rabp);
-		else {
+		else { // 如果未设置B_DONE标志位，则开始从设备读取数的处理，注意，此处并没有等待读取处理执行结束
 			rabp->b_flags =| B_READ|B_ASYNC;
 			rabp->b_wcount = -256;
 			(*bdevsw[adev.d_major].d_strategy)(rabp);
 		}
 	}
-	if (rbp==0)
+	if (rbp==0) // 如果准备读取（非预读取）的块的缓冲区已经存在，则执行bread()读取数据，并返回该缓冲区
 		return(bread(dev, blkno));
-	iowait(rbp);
-	return(rbp);
+	iowait(rbp); // 执行iowait()等待设备的同步读取处理结束
+	return(rbp); // 返回同步读取的缓冲区
 }
 
 /*
  * Write the buffer, waiting for completion.
  * Then release the buffer.
  */
+
+/*
+ * 写入可以分为同步写入，异步写入，延迟写入 3中类型，同步写入和异步写入的区别与读取处理的情况相同，前者等待设备处理结束，后者并不等待
+ * 延迟写入收，首先执行getblk()取得缓冲区，随后将准备写入设备的数据写入到该缓冲区，但是此时并不对设备提出写入请求，而是在设置缓冲区的B_ASYNC和B_DELWRI标志位后，执行brelse()释放缓冲区
+ * 经过一段时间后，当再次执行getblk() (出于与上述延迟写入不同的原因），并试图再次分配已经设置了B_DELWRI标志位的缓冲区时候，将以异步执行的方式对设备提出写入数据的请求
+ * 此外，当执行刷新缓冲区的函数bflush()时候，也会使用已设置B_DELWRI标志位的缓冲区，对设备进行写入处理
+ *
+ * bwrite()将缓冲区内的数据写入设备，如果未设置B_ASYNC标志位则进行同步写入，否则进行异步写入
+ * 参数: (1) bp, 缓冲区
+ */
+
 bwrite(bp)
 struct buf *bp;
 {
@@ -195,13 +199,13 @@ struct buf *bp;
 
 	rbp = bp;
 	flag = rbp->b_flags;
-	rbp->b_flags =& ~(B_READ | B_DONE | B_ERROR | B_DELWRI);
+	rbp->b_flags =& ~(B_READ | B_DONE | B_ERROR | B_DELWRI); // 清除下面的标志位, B_READ, B_DONE, B_ERROR, B_DELWRI
 	rbp->b_wcount = -256;
-	(*bdevsw[rbp->b_dev.d_major].d_strategy)(rbp);
-	if ((flag&B_ASYNC) == 0) {
+	(*bdevsw[rbp->b_dev.d_major].d_strategy)(rbp); // 执行在bdevsw[]中注册的设备访问函数
+	if ((flag&B_ASYNC) == 0) { // 如果未设置B_ASYNC标志位，则等待设备处理结束后，调用brelse()释放缓冲区
 		iowait(rbp);
 		brelse(rbp);
-	} else if ((flag&B_DELWRI)==0)
+	} else if ((flag&B_DELWRI)==0) // 如果已经设置了B_ASYNC标志位，则不等待设备处理结束，此外，如果未设置B_DELWRI标志位，则调用geterror()对错误进行检查
 		geterror(rbp);
 }
 
@@ -213,6 +217,13 @@ struct buf *bp;
  * This can't be done for magtape, since writes must be done
  * in the same order as requested.
  */
+
+/*
+ * bdwrite()进行延迟写入，该函数首先设置表示延迟写入的B_DELWRI标志位，然后释放缓冲区
+ * 参数:(1) bp, 缓冲区
+ *
+ */
+
 bdwrite(bp)
 struct buf *bp;
 {
@@ -221,7 +232,7 @@ struct buf *bp;
 
 	rbp = bp;
 	dp = bdevsw[rbp->b_dev.d_major].d_tab;
-	if (dp == &tmtab || dp == &httab)
+	if (dp == &tmtab || dp == &httab) // 如果写入的对象为磁带设备，则调用bawrite()并立即进行写入处理
 		bawrite(rbp);
 	else {
 		rbp->b_flags =| B_DELWRI | B_DONE;
@@ -232,6 +243,13 @@ struct buf *bp;
 /*
  * Release the buffer, start I/O on it, but don't wait for completion.
  */
+
+/*
+ * bawrite()是进行异步写入的函数，该函数首先设置B_ASYNC标志位，然后调用bwrite()
+ *  参数: (1) bp, 缓冲区
+ *
+ */
+
 bawrite(bp)
 struct buf *bp;
 {
@@ -245,6 +263,13 @@ struct buf *bp;
 /*
  * release the buffer, with no I/O implied.
  */
+
+/*
+ * brelse()用来释放缓冲区（清除B_BUSY标志位), 并将被释放的缓冲区追加到av-list，已经分配给b-list的缓冲区不会从b-list中删除
+ * 参数: (1) bp, 缓冲区
+ *
+ */
+
 brelse(bp)
 struct buf *bp;
 {
@@ -252,29 +277,37 @@ struct buf *bp;
 	register int sps;
 
 	rbp = bp;
-	if (rbp->b_flags&B_WANTED)
+	if (rbp->b_flags&B_WANTED) // 唤醒正在等待当前缓冲区的进程
 		wakeup(rbp);
-	if (bfreelist.b_flags&B_WANTED) {
+	if (bfreelist.b_flags&B_WANTED) { // 唤醒正在等待缓冲区要补充到av-list的进程，清除bfreelist的B_WANTED标志位
 		bfreelist.b_flags =& ~B_WANTED;
 		wakeup(&bfreelist);
 	}
-	if (rbp->b_flags&B_ERROR)
-		rbp->b_dev.d_minor = -1;  /* no assoc. on error */
+	if (rbp->b_flags&B_ERROR) // 如果由于设备操作错误导致设置了缓冲区的错误标志，则将小编号设置为-1， 缓冲区的设备编号发生了变化，如果不通过av-list重新分配，此缓冲区将无法再次取得，
+		rbp->b_dev.d_minor = -1;  /* no assoc. on error */ // 因为其中容纳的数据有可能是错误的，需要防止错误数据被使用
 	backp = &bfreelist.av_back;
-	sps = PS->integ;
+	sps = PS->integ; // 保存 PSW, 将处理器优先级提升到6防止发生中断
 	spl6();
-	rbp->b_flags =& ~(B_WANTED|B_BUSY|B_ASYNC);
-	(*backp)->av_forw = rbp;
+	rbp->b_flags =& ~(B_WANTED|B_BUSY|B_ASYNC); // 清除B_WANTED, B_BUSY, 和B_ASYNC标志位
+	(*backp)->av_forw = rbp; // 将缓冲区返回至av-list的末尾
 	rbp->av_back = *backp;
 	*backp = rbp;
 	rbp->av_forw = &bfreelist;
-	PS->integ = sps;
+	PS->integ = sps; // 将处理器优先级返回原值
 }
 
 /*
  * See if the block is associated with some buffer
  * (mainly to avoid getting hung up on a wait in breada)
  */
+
+/*
+ * incore()检查分配给某个设备的某个块的缓冲区是否存在
+ * 如果存在，则返回该缓冲区，如果不存在则返回0
+ * incore()遍历该设备的b-list， 对buf结构体的b_blkno和b_dev分别进行检查
+ * 参数: (1) dev, 设备编号 (2) blkno, 块编号
+ */
+
 incore(adev, blkno)
 {
 	register int dev;
@@ -300,10 +333,11 @@ incore(adev, blkno)
 
 /*
  * getblk()是取得根据设备编号与块编号命名的缓冲区的函数
- *
- *
- *
- *
+ * 按顺序遍历相应设备的b-list, 寻找是否存在所需的缓冲区，找到后将其从av-list中删除（设置标志位为B_BUSY), 并返回该缓冲区
+ * 如果已经设置了该缓冲区的标志位B_BUSY, 则设置标志位为B_WANTED并进入睡眠状态，当正在使用该缓冲区的其他进程将其释放后，进程将被唤醒
+ * 如果b-list中不存在所需的缓冲区，则取得位于av-list头部的缓冲区（设置其标志位为B_BUSY), 对其重新命名，并追加到b-list的头部，然后返回该缓冲区，设置标志位B_BUSY意在表示该缓冲区正处于使用中的状态
+ * 在尝试从av-list取得缓冲区时候，如果该缓冲区的类型为B_DELWRI(延迟写入), 则需要对设备进行异步读写
+ * 参数: (1) dev, 设备编号 (2) blkno, 块编号
  */
 
 getblk(dev, blkno)
@@ -312,61 +346,68 @@ getblk(dev, blkno)
 	register struct devtab *dp;
 	extern lbolt;
 
-	if(dev.d_major >= nblkdev)
+	if(dev.d_major >= nblkdev) // 如果大编号的值过大，则调用panic()
 		panic("blkdev");
 
     loop:
-	if (dev < 0)
+	if (dev < 0) // NODEV(-1)时候的处理，将dp设置为NODEV的b-list的起始元素
 		dp = &bfreelist;
-	else {
-		dp = bdevsw[dev.d_major].d_tab;
+	else { // 非NODEV时候的处理
+		dp = bdevsw[dev.d_major].d_tab; // 从bdevsw[]中取得相应设备的devtab结构体(b-list的起始元素）
 		if(dp == NULL)
 			panic("devtab");
-		for (bp=dp->b_forw; bp != dp; bp = bp->b_forw) {
+		for (bp=dp->b_forw; bp != dp; bp = bp->b_forw) { // 遍历b-list，检查是否存在所需的缓冲区
 			if (bp->b_blkno!=blkno || bp->b_dev!=dev)
 				continue;
-			spl6();
-			if (bp->b_flags&B_BUSY) {
+			spl6(); // 如果成功找到，则将处理器优先级提高到6，防止发生中断，由于块设备处理结束时候，引发的中断处理等会操作缓冲区，因此抑制中断可以避免在操作缓冲区时候发生冲突
+			if (bp->b_flags&B_BUSY) { // 如果此缓冲区正在使用，则设置B_WANTED标志位并进入睡眠状态
 				bp->b_flags =| B_WANTED;
 				sleep(bp, PRIBIO);
 				spl0();
 				goto loop;
 			}
-			spl0();
+			spl0(); // 将处理器优先级重置为0， 设置处于使用中的标志位，然后将缓冲区从av-list中删除，返回该缓冲区
 			notavail(bp);
 			return(bp);
 		}
 	}
-	spl6();
-	if (bfreelist.av_forw == &bfreelist) {
+	spl6(); // 如果在b-list中没有找到所需的缓冲区，或是希望取得NODEV的缓冲区时候，从av-list中取得缓冲区，并将处理器优先级提升为6，防止发生中断
+	if (bfreelist.av_forw == &bfreelist) { // av-list为空时的处理，设置av-list的起始元素bfreelist的B_WANTED标志位并进入睡眠状态
 		bfreelist.b_flags =| B_WANTED;
 		sleep(&bfreelist, PRIBIO);
 		spl0();
 		goto loop;
 	}
-	spl0();
-	notavail(bp = bfreelist.av_forw);
-	if (bp->b_flags & B_DELWRI) {
+	spl0(); // 将处理器的优先级重置为0
+	notavail(bp = bfreelist.av_forw); // 取得av-list的起始元素的缓冲区，将其从av-list中删除，并且对其设置B_BUSY标志位
+	if (bp->b_flags & B_DELWRI) { // 如果取得的缓冲区设置了B_BDELWRI(延迟写入)标志位，则立刻对设备进行异步写入，且无需等待设备的处理结束
 		bp->b_flags =| B_ASYNC;
 		bwrite(bp);
 		goto loop;
 	}
-	bp->b_flags = B_BUSY | B_RELOC;
-	bp->b_back->b_forw = bp->b_forw;
+	bp->b_flags = B_BUSY | B_RELOC; // B_RELOC标志位在UNIX V6中未被使用，此时只是设置了B_BUSY（和B_RELOC)标志位
+	bp->b_back->b_forw = bp->b_forw; // 将缓冲区从当前分配的b-list中删除
 	bp->b_forw->b_back = bp->b_back;
-	bp->b_forw = dp->b_forw;
+	bp->b_forw = dp->b_forw; // 将缓冲区追加到新的b-list的起始位置
 	bp->b_back = dp;
 	dp->b_forw->b_back = bp;
 	dp->b_forw = bp;
-	bp->b_dev = dev;
+	bp->b_dev = dev; // 为缓冲区命名
 	bp->b_blkno = blkno;
-	return(bp);
+	return(bp); // 返回缓冲区
 }
 
 /*
  * Wait for I/O completion on the buffer; return errors
  * to the user.
  */
+
+/*
+ * iowait()是等待设备处理结束的函数，使得进程进入睡眠状态直至设置缓冲区的B_DONE标志位
+ * 参数: (1) bp, 缓冲区
+ *
+ */
+
 iowait(bp)
 struct buf *bp;
 {
@@ -384,6 +425,13 @@ struct buf *bp;
  * Unlink a buffer from the available list and mark it busy.
  * (internal interface)
  */
+
+/*
+ * notavail()是将缓冲区从av-list中删除，同时设置B_BUSY（使用中)标志位的函数
+ * 参数: (1) bp，缓冲区
+ *
+ */
+
 notavail(bp)
 struct buf *bp;
 {
@@ -392,24 +440,32 @@ struct buf *bp;
 
 	rbp = bp;
 	sps = PS->integ;
-	spl6();
-	rbp->av_back->av_forw = rbp->av_forw;
-	rbp->av_forw->av_back = rbp->av_back;
+	spl6(); // 将优先级提升到6，防止发生中断，由于块设备引发的中断处理等会操作缓冲区，因此抑制中断可以避免在操作缓冲区时候发生冲突
+	rbp->av_back->av_forw = rbp->av_forw; // 从av-list中删除对象缓冲区
+	rbp->av_forw->av_back = rbp->av_back; // 设置B_BUSY标志位，表明此缓冲区正在使用
 	rbp->b_flags =| B_BUSY;
-	PS->integ = sps;
+	PS->integ = sps; // 将处理器优先级恢复原值
 }
 
 /*
  * Mark I/O complete on a buffer, release it if I/O is asynchronous,
  * and wake up anyone waiting for it.
  */
+
+/*
+ * iodone()是在块设备的处理结束后被调用的函数，用来设置缓冲区的B_DONE标志位
+ * 它在块设备处理结束时候执行的中断处理函数中被调用
+ * 同步读写时候，唤醒正在等待缓冲区的进程，异步读写时候，执行brelse()释放该缓冲区
+ * 参数: (1) bp, 缓冲区
+ */
+
 iodone(bp)
 struct buf *bp;
 {
 	register struct buf *rbp;
 
 	rbp = bp;
-	if(rbp->b_flags&B_MAP)
+	if(rbp->b_flags&B_MAP) // 在PDP-11/40的环境下不做任何处理
 		mapfree(rbp);
 	rbp->b_flags =| B_DONE;
 	if (rbp->b_flags&B_ASYNC)
@@ -591,31 +647,44 @@ struct buf *bp;
 /*
  * swap I/O
  */
+
+/*
+ * swap()是进行交换处理的函数，该函数使用buf结构体类型的变量swbuf，进行RAW输入输出实现交换处理
+ * 因为swbuf只有一个，无法同时交换两个以上的进程，所以需要进行排他处理
+ * swap()为swbuf设定是同的参数，调用交换磁盘的设备驱动读写数据，因为参数的长度以64字节为单位，所以需要将地址变为字节单位，再将长度（字长）变为2的补数的形式
+ * 这些值最后都会赋予交换磁盘的寄存器
+ * 交换处理因为使用RAW输入输出，所以每次的传送量都不受块长度的限制，但是，并不具备缓存的功能
+ * 参数: (1) blkno, 交换磁盘中的块编号 (2) coreaddr, 交换对象的物理内存地址，64字节为单位 (3) count, 交换对象的长度，64字节为单位 (4) rdflg, 0:换出， 1:换入
+ *
+ * 交换磁盘的设备编号通过swapdev指定， 系统管理者可以根据实际环境修改这个值，但是需要对内核进行重新构筑，下面代码中大编号和小编号都为0
+ *
+ */
+
 swap(blkno, coreaddr, count, rdflg)
 {
 	register int *fp;
 
 	fp = &swbuf.b_flags;
 	spl6();
-	while (*fp&B_BUSY) {
+	while (*fp&B_BUSY) { // 如果有其他进程使用swbuf, 则设置swbuf.b_flags的B_WANTED标志位，然后进入睡眠状态
 		*fp =| B_WANTED;
 		sleep(fp, PSWP);
 	}
-	*fp = B_BUSY | B_PHYS | rdflg;
-	swbuf.b_dev = swapdev;
+	*fp = B_BUSY | B_PHYS | rdflg; // 如果可以使用swbuf, 则设置swbuf.b_flags的B_BUSY标志位、B_PHYS标志位（RAW输入输出）和rdflg标志位（读取或者写入）
+	swbuf.b_dev = swapdev; // 设置swbuf的参数启动交换磁盘的输入输出，将通过参数设定的以64字节为单位的地址和长度分别转换为字节单位和2的补数的字单位
 	swbuf.b_wcount = - (count<<5);	/* 32 w/block */
 	swbuf.b_blkno = blkno;
 	swbuf.b_addr = coreaddr<<6;	/* 64 b/block */
 	swbuf.b_xmem = (coreaddr>>10) & 077;
-	(*bdevsw[swapdev>>8].d_strategy)(&swbuf);
+	(*bdevsw[swapdev>>8].d_strategy)(&swbuf); // 调用交换磁盘的设备驱动
 	spl6();
-	while((*fp&B_DONE)==0)
+	while((*fp&B_DONE)==0) // 进入睡眠状态等待交换磁盘的处理结束
 		sleep(fp, PSWP);
-	if (*fp&B_WANTED)
+	if (*fp&B_WANTED) // 交换磁盘处理结束后，唤醒正在等待swbuf的进程
 		wakeup(fp);
 	spl0();
-	*fp =& ~(B_BUSY|B_WANTED);
-	return(*fp&B_ERROR);
+	*fp =& ~(B_BUSY|B_WANTED); // 清除swbuf的B_BUSY标志位和B_WANTED标志位
+	return(*fp&B_ERROR); // 返回交换处理成功与否的标志，访问当对设备失败时候，设备驱动将设定swbuf.B_ERROR标志位
 }
 
 /*
@@ -624,6 +693,15 @@ swap(blkno, coreaddr, count, rdflg)
  * are flushed out.
  * (from umount and update)
  */
+
+/*
+ * bflush()将延迟写入缓冲区内的数据一次性写入设备
+ * bflush()被update()调用，而update()被panic()， sync(), sumount()调用
+ * 在UNIX V6的环境中，守护进程/etc/update每隔30秒运行一次sync指令
+ * 参数: (1) dev, 处理对象的设备编号，值为-1, (NODEV)时候刷新所有设备的延迟写入缓冲区
+ *
+ */
+
 bflush(dev)
 {
 	register struct buf *bp;
@@ -651,6 +729,17 @@ loop:
  * Essentially all the work is computing physical addresses and
  * validating them.
  */
+
+/*
+ * physio()是进行RAW输入输出的函数，传送数据的地址、长度以及在块设备中的偏移量，都通过user结构体指定
+ * physio()由注册于字符设备驱动表中用于RAW输入输出的设备驱动调用，所使用的缓冲区不是buf[], 而是供RAW输入输出专用的缓冲区
+ * 处理的流程是: 读入用户APR的值，根据虚拟地址直接计算处物理地址，然后向缓冲区传递参数，再执行访问块设备的函数
+ * 传递给physio()的user结构体成员变量：
+ * (1) u.u_base, 传送数据的虚拟地址（字节为单位） (2) u.u_offset, 块设备中的偏移量（单位为字节） (3) u.u_count, 传送数据长度（字节为单位）
+ * 参数：(1) start, 指向块设备访问函数的指针 (2) abp, 缓冲区， 使用的是RAW输入输出专用的缓冲区 (3) dev, 设备编号 (4) rw, 指定是读取还是写入
+ *
+ */
+
 physio(strat, abp, dev, rw)
 struct buf *abp;
 int (*strat)();
@@ -665,12 +754,12 @@ int (*strat)();
 	/*
 	 * Check odd base, odd count, and address wraparound
 	 */
-	if (base&01 || u.u_count&01 || base>=base+u.u_count)
-		goto bad;
-	ts = (u.u_tsize+127) & ~0177;
+	if (base&01 || u.u_count&01 || base>=base+u.u_count) // 检查作为参数传递进来的user结构体的成员变量
+		goto bad;  // (1) 传送的虚拟地址为偶数， (2) 传送的数据长度为偶数 (3) 虚拟地址和数据长度之和是否溢出 (4) 是否试图传送位于代码段领域的数据 （5）传送数据是否位于数据领域(下限）和 栈领域（上限）之间
+	ts = (u.u_tsize+127) & ~0177; // ts的值为代码段的长度（以64字节为单位，并以128*64字节为单位向上取整）
 	if (u.u_sep)
 		ts = 0;
-	nb = (base>>6) & 01777;
+	nb = (base>>6) & 01777; // nb的值为传送数据的虚拟地址（以64字节为单位）
 	/*
 	 * Check overlap with text. (ts and nb now
 	 * in 64-byte clicks)
@@ -687,12 +776,12 @@ int (*strat)();
 	    && nb < 1024-u.u_ssize)
 		goto bad;
 	spl6();
-	while (bp->b_flags&B_BUSY) {
+	while (bp->b_flags&B_BUSY) { // 如果供RAW输入输出使用的缓冲区正在使用，则设置B_WANTED标志位，然后进入睡眠状态直到缓冲区被释放
 		bp->b_flags =| B_WANTED;
 		sleep(bp, PRIBIO);
 	}
-	bp->b_flags = B_BUSY | B_PHYS | rw;
-	bp->b_dev = dev;
+	bp->b_flags = B_BUSY | B_PHYS | rw; // 将作为参数的user结构体传递给缓冲区，根据用户PAR的值从虚拟地址计算得到物理地址，将buf.b_xmem设定为物理内存第16位之后的部分
+	bp->b_dev = dev;  // 从u.u_offset计算出块编号，同时设定执行进程的SLOCK标志位，防止进程被换出至交换空间
 	/*
 	 * Compute physical address by simulating
 	 * the segmentation hardware.
@@ -705,16 +794,16 @@ int (*strat)();
 	bp->b_wcount = -((u.u_count>>1) & 077777);
 	bp->b_error = 0;
 	u.u_procp->p_flag =| SLOCK;
-	(*strat)(bp);
+	(*strat)(bp); // 执行设备驱动的访问函数
 	spl6();
-	while ((bp->b_flags&B_DONE) == 0)
+	while ((bp->b_flags&B_DONE) == 0) // 进入睡眠状态，等待块设备处理结束
 		sleep(bp, PRIBIO);
-	u.u_procp->p_flag =& ~SLOCK;
-	if (bp->b_flags&B_WANTED)
+	u.u_procp->p_flag =& ~SLOCK; // 清除SLOCK标志位
+	if (bp->b_flags&B_WANTED) // 如果有进程在等待供RAW输入输出使用的缓冲区，则将其唤醒
 		wakeup(bp);
 	spl0();
 	bp->b_flags =& ~(B_BUSY|B_WANTED);
-	u.u_count = (-bp->b_resid)<<1;
+	u.u_count = (-bp->b_resid)<<1; // buf.b_resid中保存有因出错而没能传送的数据长度，将其赋予u.u_count
 	geterror(bp);
 	return;
     bad:
@@ -727,6 +816,13 @@ int (*strat)();
  * code.  Actually the latter is always true because devices
  * don't yet return specific errors.
  */
+
+/*
+ * geterror()是处理错误的函数
+ * 如果未设置buf.b_flags的错误标志位，则不做任何处理
+ * 参数: (1) abp, 缓冲区
+ */
+
 geterror(abp)
 struct buf *abp;
 {
